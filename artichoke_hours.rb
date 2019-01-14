@@ -1,70 +1,77 @@
-require 'google/api_client'
+require 'google/apis/calendar_v3'
+require 'googleauth/stores/file_token_store'
 require 'time'
 
-START_AT = DateTime.new(2018, 1, 2).rfc3339
-END_AT = DateTime.now.rfc3339
+Calendar = Google::Apis::CalendarV3 # Alias the module
 
-def client
-  @client ||= Google::APIClient.new(
-    :application_name => 'Ruby Calendar sample',
-    :application_version => '1.0.0'
-  )
-end
+calendar_id = 'primary'
+START_AT = DateTime.new(2018, 1, 2).iso8601
+END_AT = DateTime.now.iso8601
 
-def setup!
-  client_secrets = Google::APIClient::ClientSecrets.load
-  authorization = client_secrets.to_authorization
-  authorization.scope = 'https://www.googleapis.com/auth/calendar.readonly'
-  # http://stackoverflow.com/a/25694982/358804
-  puts "Please visit: #{authorization.authorization_uri.to_s}"
-  printf "Enter the code: code="
-  code = gets
-  authorization.code = code.strip
-  authorization.fetch_access_token!
-  client.authorization = authorization
-end
+# https://developers.google.com/calendar/quickstart/ruby#step_3_set_up_the_sample
+OOB_URI = 'urn:ietf:wg:oauth:2.0:oob'.freeze
+APPLICATION_NAME = 'Google Calendar API Ruby Quickstart'.freeze
+CREDENTIALS_PATH = 'client_secrets.json'.freeze
+# token.yaml stores the user's access and refresh tokens, and is created automatically when the authorization flow completes for the first time.
+TOKEN_PATH = 'token.yaml'.freeze
+SCOPE = Google::Apis::CalendarV3::AUTH_CALENDAR_READONLY
 
-def to_datetime(time)
-  if time.is_a?(String)
-    DateTime.parse(time)
-  else
-    time
+##
+# Ensure valid credentials, either by restoring from the saved credentials
+# files or intitiating an OAuth2 authorization. If authorization is required,
+# the user's default browser will be launched to approve the request.
+#
+# @return [Google::Auth::UserRefreshCredentials] OAuth2 credentials
+def authorize
+  client_id = Google::Auth::ClientId.from_file(CREDENTIALS_PATH)
+  token_store = Google::Auth::Stores::FileTokenStore.new(file: TOKEN_PATH)
+  authorizer = Google::Auth::UserAuthorizer.new(client_id, SCOPE, token_store)
+  user_id = 'default'
+  credentials = authorizer.get_credentials(user_id)
+  if credentials.nil?
+    url = authorizer.get_authorization_url(base_url: OOB_URI)
+    puts 'Open the following URL in the browser and enter the ' \
+         "resulting code after authorization:\n" + url
+    code = gets
+    credentials = authorizer.get_and_store_credentials_from_code(
+      user_id: user_id, code: code, base_url: OOB_URI
+    )
   end
+  credentials
 end
 
-
-setup!
-service = client.discovered_api('calendar', 'v3')
-
-# https://developers.google.com/google-apps/calendar/v3/reference/events/list#examples
-# https://developers.google.com/api-client-library/ruby/guide/pagination
-request = {
-  api_method: service.events.list,
-  parameters: {
-    'calendarId' => 'aidan.feldman@gmail.com',
-    'q' => 'Artichoke',
-    'timeMin' => START_AT,
-    'timeMax' => END_AT
-  }
-}
-total_hours = 0
+def create_service
+  service = Calendar::CalendarService.new
+  service.client_options.application_name = APPLICATION_NAME
+  service.authorization = authorize
+  service
+end
 
 puts '-------------------'
-loop do
-  result = client.execute(request)
-  events = result.data.items
 
-  events.each do |event|
-    # for some reason, dates for all-day events are a different attribute, and are Strings
-    start_at = to_datetime(event.start['dateTime'] || event.start['date'])
-    end_at = to_datetime(event.end['dateTime'] || event.end['date'])
+service = create_service
+total_hours = 0
+next_page = nil
+begin
+  response = service.list_events(
+    calendar_id,
+    q: 'Artichoke',
+    time_min: START_AT,
+    time_max: END_AT,
+    page_token: next_page
+  )
 
-    if event.start['date']
+  response.items.each do |event|
+    # for some reason, dates for all-day events are a different attribute
+    start_at = event.start.date || event.start.date_time
+    end_at = event.end.date || event.end.date_time
+
+    if event.start.date
       # don't count full-day events
       duration_hours = 0
     else
-      duration_sec = end_at - start_at
-      duration_hours = duration_sec.to_f / 60 / 60
+      duration_days = end_at - start_at
+      duration_hours = (duration_days * 24).to_f
     end
 
     if event.summary.match(/rehearsal|tech/)
@@ -78,9 +85,8 @@ loop do
     end
   end
 
-  break unless result.next_page_token
-  request = result.next_page
-end
+  next_page = response.next_page_token
+end while next_page
 
 total_rehearsals = total_hours / 2
 puts "Total rehearsals: #{total_rehearsals}"
