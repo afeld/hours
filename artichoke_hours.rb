@@ -1,6 +1,9 @@
 require 'google/api_client'
 require 'time'
 
+START_AT = DateTime.new(2018, 1, 2).rfc3339
+END_AT = DateTime.now.rfc3339
+
 def client
   @client ||= Google::APIClient.new(
     :application_name => 'Ruby Calendar sample',
@@ -16,7 +19,7 @@ def setup!
   puts "Please visit: #{authorization.authorization_uri.to_s}"
   printf "Enter the code: code="
   code = gets
-  authorization.code = code
+  authorization.code = code.strip
   authorization.fetch_access_token!
   client.authorization = authorization
 end
@@ -40,11 +43,11 @@ request = {
   parameters: {
     'calendarId' => 'aidan.feldman@gmail.com',
     'q' => 'Artichoke',
-    'timeMin' => '2015-01-16T00:00:00Z'
+    'timeMin' => START_AT,
+    'timeMax' => END_AT
   }
 }
-total_hours_old = 0
-total_hours_new = 0
+total_hours = 0
 
 puts '-------------------'
 loop do
@@ -65,11 +68,7 @@ loop do
     end
 
     if event.summary.match(/rehearsal|tech/)
-      if start_at.year >= 2015
-        total_hours_new += duration_hours
-      else
-        total_hours_old += duration_hours
-      end
+      total_hours += duration_hours
     else
       puts [
         event.summary.ljust(30),
@@ -83,7 +82,5 @@ loop do
   request = result.next_page
 end
 
-total_rehearsals_old = total_hours_old / 2
-total_rehearsals_new = total_hours_new / 2
-puts "Total rehearsals pre-2015: #{total_rehearsals_old}"
-puts "Total rehearsals 2015+: #{total_rehearsals_new}"
+total_rehearsals = total_hours / 2
+puts "Total rehearsals: #{total_rehearsals}"
